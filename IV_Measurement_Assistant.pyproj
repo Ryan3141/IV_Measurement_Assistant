@@ -21,16 +21,15 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Install_If_Necessary.py">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="IV_Graph.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="IV_GUI.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="IV_Measurement_Assistant.py" />
+    <Compile Include="Pad_Description_File.py">
+      <SubType>Code</SubType>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <Content Include="IV_GUI.ui" />

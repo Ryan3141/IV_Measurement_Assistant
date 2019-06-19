@@ -1,23 +1,23 @@
+if __name__ == "__main__": # This allows running this module by running this script
+	import sys
+	sys.path.insert(0, "..")
 
 import sys
 from PyQt5 import uic, QtWidgets
-from PyQt5.QtWidgets import QApplication, QWidget, QLabel
-from PyQt5.QtGui import QIcon, QPixmap
+from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout, QFileDialog
 from PyQt5.QtCore import QMetaObject, Q_RETURN_ARG, Q_ARG
 from PyQt5 import QtCore
 
+import numpy as np
 import configparser
 import time
-import sqlite3
 
-from Install_If_Necessary import Ask_For_Install
-try:
-	import mysql.connector
-except:
-	Ask_For_Install( "mysql-connector-python" )
-	import mysql.connector
+from MPL_Shared.Temperature_Controller import Temperature_Controller
+from MPL_Shared.Temperature_Controller_Settings import TemperatureControllerSettingsWindow
+from MPL_Shared.SQL_Controller import Commit_XY_Data_To_SQL, Connect_To_SQL
+from MPL_Shared.IV_Measurement_Assistant import IV_Controller
 
-from IV_Measurement_Assistant import IV_Controller
+from IV_Measurement_Assistant.Pad_Description_File import Get_Device_Description_File
 
 def resource_path( relative_path ):
 	return relative_path
@@ -33,50 +33,6 @@ def Popup_Error( title, message ):
 	error.exec_()
 	return
 
-def Connect_To_SQL( configuration_file ):
-	db_type = configuration_file['SQL_Server']['database_type']
-	try:
-		if db_type == "QSQLITE":
-			sql_conn = sqlite3.connect( configuration_file['SQL_Server']['database_name'] )
-		elif db_type == "QMYSQL":
-			sql_conn = mysql.connector.connect(host=configuration_file['SQL_Server']['host_location'],database=configuration_file['SQL_Server']['database_name'],
-								user=configuration_file['SQL_Server']['username'],password=configuration_file['SQL_Server']['password'])
-			sql_conn.ping( True ) # Maintain connection to avoid timing out
-		return db_type, sql_conn
-	except sqlite3.Error as e:
-		error = QtWidgets.QMessageBox()
-		error.setIcon( QtWidgets.QMessageBox.Critical )
-		error.setText( str(e) )
-		error.setWindowTitle( "Unable to connect to SQL Database" )
-		error.exec_()
-		return None, None
-	except mysql.connector.Error as e:
-		error = QtWidgets.QMessageBox()
-		error.setIcon( QtWidgets.QMessageBox.Critical )
-		error.setText( str(e) )
-		error.setWindowTitle( "Unable to connect to SQL Database" )
-		error.exec_()
-		return None, None
-
-def Commit_To_SQL( sql_type, sql_conn, x_data, y_data, sample_name, user, temperature_in_k, measurement_setup, location_x, location_y ):
-	get_measurement_id_string = '''SELECT MAX(measurement_id) FROM mpl.iv_measurements'''
-	if sql_type == 'QSQLITE':
-		meta_data_sql_string = '''INSERT INTO iv_measurements(sample_name,user,temperature_in_k,measurement_setup,location_x,location_y,time)
-									VALUES(?,?,?,?,?,?,now())'''
-		data_sql_string = '''INSERT INTO raw_iv_data(measurement_id,voltage_v,current_a) VALUES(?,?,?)'''
-	else:
-		meta_data_sql_string = '''INSERT INTO iv_measurements(sample_name,user,temperature_in_k,measurement_setup,location_x,location_y,time)
-									VALUES(%s,%s,%s,%s,%s,%s,now());'''
-		data_sql_string = '''INSERT INTO iv_raw_data(measurement_id,voltage_v,current_a) VALUES(%s,%s,%s)'''
-
-	cur = sql_conn.cursor()
-	cur.execute( meta_data_sql_string, (sample_name, user, temperature_in_k, measurement_setup, location_x, location_y) )
-	cur.execute( get_measurement_id_string )
-	measurement_id = int( cur.fetchone()[0] )
-	data_as_tuple = tuple(zip([measurement_id] * len(x_data),(float(x) for x in x_data),(float(y) for y in y_data))) # mysql.connector requires a tuple or list (not generator) and native float type as input
-	cur.executemany( data_sql_string, data_as_tuple )
-	sql_conn.commit()
-
 
 class IV_Measurement_Assistant_App(QWidget, Ui_MainWindow):
 	measurementRequested_signal = QtCore.pyqtSignal(float, float, float)
@@ -87,6 +43,7 @@ class IV_Measurement_Assistant_App(QWidget, Ui_MainWindow):
 		self.setupUi(self)
 
 		self.current_data = None
+		self.measurement_actively_running = False
 
 		self.Init_Subsystems()
 		self.iv_controller = IV_Controller()
@@ -104,7 +61,10 @@ class IV_Measurement_Assistant_App(QWidget, Ui_MainWindow):
 		configuration_file.read( resource_path( "configuration.ini" ) )
 
 		self.iv_communications = None
-		self.sql_type, self.sql_connection = Connect_To_SQL( configuration_file )
+		self.sql_type, self.sql_conn = Connect_To_SQL( resource_path( "configuration.ini" ) )
+		self.config_window = TemperatureControllerSettingsWindow()
+
+		self.temp_controller = Temperature_Controller( configuration_file, parent=self )
 
 		user = configuration_file['SQL_Server']['user']
 		if user:
@@ -123,10 +83,29 @@ class IV_Measurement_Assistant_App(QWidget, Ui_MainWindow):
 		self.iv_controller.newSweepStarted_signal.connect( self.iv_Graph.new_plot )
 		self.iv_controller.dataPointGotten_signal.connect( self.iv_Graph.add_new_data_point )
 
-		self.iv_controller.sweepFinished_signal.connect( self.Set_Current_Data )
+		self.selectDescriptionFile_pushButton.clicked.connect( self.Select_Device_File )
+		self.config_window.Connect_Functions( self.temp_controller )
+		self.openConfigurationWindow_pushButton.clicked.connect( lambda : self.config_window.show() )
+		self.takeMeasurementSweep_pushButton.clicked.connect( self.Start_Measurement_Sweep )
+
+		# Update labels on connection and disconnection to wifi devices
+		self.temp_controller.Device_Connected.connect( self.Temp_Controller_Connected )
+		self.temp_controller.Device_Disconnected.connect( self.Temp_Controller_Disconnected )
+		self.temp_controller.Temperature_Changed.connect( lambda temperature : self.currentTemp_lineEdit.setText( '{:.2f}'.format( temperature ) ) )
+
+
+	def Temp_Controller_Connected( self, identifier, type_of_connection ):
+		self.tempControllerConnected_label.setText( str(identifier) + " Connected" )
+		self.tempControllerConnected_label.setStyleSheet("QLabel { background-color: rgba(0,255,0,255); color: rgba(0, 0, 0,255) }")
+
+	def Temp_Controller_Disconnected( self ):
+		self.tempControllerConnected_label.setText( "Temperature Controller Not Connected" )
+		self.tempControllerConnected_label.setStyleSheet("QLabel { background-color: rgba(255,0,0,255); color: rgba(0, 0, 0,255) }")
+
 
 	def Set_Current_Data( self, x_data, y_data ):
 		self.current_data = ( x_data, y_data )
+		self.iv_Graph.plot_finished( x_data, y_data )
 
 	def ivConnectionStateChanged( self, connected_or_disconnected ):
 		if connected_or_disconnected:
@@ -136,10 +115,16 @@ class IV_Measurement_Assistant_App(QWidget, Ui_MainWindow):
 		self.iv_communications = IV_Measurement_Assistant.Initialize_Connection()
 
 	def Take_Measurement( self ):
-		input_start = float( self.start_lineEdit.text() )
-		input_end = float( self.end_lineEdit.text() )
-		input_step = float( self.step_lineEdit.text() )
+		input_start = float( self.startVoltage_lineEdit.text() )
+		input_end = float( self.endVoltage_lineEdit.text() )
+		input_step = float( self.stepVoltage_lineEdit.text() )
+
+		try: self.iv_controller.sweepFinished_signal.disconnect() 
+		except Exception: pass
+		self.iv_controller.sweepFinished_signal.connect( self.Set_Current_Data )
 		self.measurementRequested_signal.emit( input_start, input_end, input_step )
+
+
 		#QMetaObject.invokeMethod( self.iv_controller, 'Voltage_Sweep', Qt.AutoConnection,
 		#				  Q_RETURN_ARG('int'), Q_ARG(float, input_start), Q_ARG(float, input_end), Q_ARG(float, input_step) )
 		#self.recent_results = (input_start = -1, input_end = 1, input_step = 0.01)
@@ -151,10 +136,8 @@ class IV_Measurement_Assistant_App(QWidget, Ui_MainWindow):
 
 		timestr = time.strftime("%Y%m%d-%H%M%S")
 		sample_name = str( self.sampleName_lineEdit.text() )
-		location_x = str( self.xLocation_lineEdit.text() )
-		location_y = str( self.yLocation_lineEdit.text() )
 
-		file_name = "IV Data_" + sample_name + "_" + str(location_x) + "_" + str(location_y) + "_" + timestr + ".csv"
+		file_name = "IV Data_" + sample_name + "_" + timestr + ".csv"
 		print( "Saving File: " + file_name )
 		with open( file_name, 'w' ) as outfile:
 			outfile.write( ','.join([str(x) for x in self.current_data[0]]) + '\n' )
@@ -166,15 +149,134 @@ class IV_Measurement_Assistant_App(QWidget, Ui_MainWindow):
 
 		sample_name = str( self.sampleName_lineEdit.text() )
 		user = str( self.user_lineEdit.text() )
-		location_x = float( self.xLocation_lineEdit.text() )
-		location_y = float( self.yLocation_lineEdit.text() )
 		if sample_name == ''  or user == '':
 			Popup_Error( "Error", "Must enter sample name and user" )
 			return
-		Commit_To_SQL( sql_type=self.sql_type, sql_conn=self.sql_connection, x_data=self.current_data[0], y_data=self.current_data[1],
-			   sample_name=sample_name, user=user, temperature_in_k=None, measurement_setup="Microprobe", location_x=location_x, location_y=location_y )
+
+		meta_data_sql_entries = dict( sample_name=sample_name, user=user, temperature_in_k=None, measurement_setup="Microprobe",
+					location=None, device_size=None, blackbody_temperature_in_c=None,
+					bandpass_filter=None, aperture_radius_in_m=None )
+
+		Commit_XY_Data_To_SQL( self.sql_type, self.sql_conn, xy_data_sql_table="iv_raw_data", xy_sql_labels=("voltage_v","current_a"),
+						   x_data=self.current_data[0], y_data=self.current_data[1], metadata_sql_table="iv_measurements", **meta_data_sql_entries )
+
 		print( "Data committed to database: " + sample_name + "_" + str(location_x) + "_" + str(location_y) )
 
+	def Select_Device_File( self ):
+		fileName, _ = QFileDialog.getOpenFileName( self, "QFileDialog.getSaveFileName()", "", "CSV Files (*.csv);;All Files (*)" )
+		config_info = Get_Device_Description_File( fileName )
+		if config_info is None:
+			Popup_Error( "Error", "Invalid device file given" )
+			return
+
+		self.descriptionFilePath_lineEdit.setText( fileName )
+
+
+	def Start_Measurement_Sweep( self ):
+		try:
+			temp_start, temp_end, temp_step = float(self.startTemp_lineEdit.text()), float(self.endTemp_lineEdit.text()), float(self.stepTemp_lineEdit.text())
+			v_start, v_end, v_step = float(self.startVoltage_lineEdit.text()), float(self.endVoltage_lineEdit.text()), float(self.stepVoltage_lineEdit.text())
+		except:
+			Popup_Error( "Error", "Invalid arguement for temperature or voltage range" )
+			return
+
+		device_config_data = Get_Device_Description_File( self.descriptionFilePath_lineEdit.text() )
+		if device_config_data is None:
+			Popup_Error( "Error", "Invalid device file given" )
+			return
+
+		temperatures_to_measure = np.arange( temp_start, temp_end + temp_step, temp_step )
+		sample_name = self.sampleName_lineEdit.text()
+		user = str( self.user_lineEdit.text() )
+		if( sample_name == "" or user == "" ):
+			Popup_Error( "Error", "Must enter a sample name and user" )
+			return
+
+		self.takeMeasurementSweep_pushButton.clicked.disconnect()
+		#self.takeMeasurementSweep_pushButton.setText( "Stop Measurement" )
+		self.takeMeasurementSweep_pushButton.setStyleSheet("QPushButton { background-color: rgba(255,0,0,255); color: rgba(0, 0, 0,255); }")
+		self.takeMeasurementSweep_pushButton.clicked.connect( self.Stop_Measurment_Sweep )
+
+		self.Run_Measurment_Loop( sample_name=sample_name, user=user, device_config_data=device_config_data, temperatures_to_measure=temperatures_to_measure, v_start=v_start, v_end=v_end, v_step=v_step )
+
+	def Stop_Measurment_Sweep( self ):
+		self.measurement_actively_running = False
+		if self.temp_controller is not None:
+			self.temp_controller.Turn_Off()
+
+		try: self.run_pushButton.clicked.disconnect() 
+		except Exception: pass
+		
+		#self.takeMeasurementSweep_pushButton.setText( "Run Sweep" )
+		self.takeMeasurementSweep_pushButton.setStyleSheet("QPushButton { background-color: rgba(0,255,0,255); color: rgba(0, 0, 0,255); }")
+		self.takeMeasurementSweep_pushButton.clicked.connect( self.Start_Measurement_Sweep )
+
+	def Wait_For_Stable_Temp( self, temperature ):
+		self.temp_controller.Set_Temperature_In_K( temperature )
+		self.temp_controller.Turn_On()
+
+		while( not self.temp_controller.Temperature_Is_Stable() ):
+			QtCore.QCoreApplication.processEvents()
+			if not self.measurement_actively_running:
+				print( "Quitting measurment early" )
+				return False
+		print( "Temperature stable around: " + str(temperature) + '\n' )
+		return True
+
+	def Pads_Ready( self, pads, is_reversed ):
+		self.waiting_on_pads = False
+		self.pads_are_reversed = is_reversed
+
+	def Wait_For_Pads_Set( self, pad1, pad2 ):
+		self.waiting_on_pads = True
+		temp_connection = self.temp_controller.Pads_Selected_Changed.connect( self.Pads_Ready )
+		self.temp_controller.Set_Active_Pads( int(pad1), int(pad2) )
+		while( self.waiting_on_pads ):
+			QtCore.QCoreApplication.processEvents()
+			if not self.measurement_actively_running:
+				print( "Quitting measurment early" )
+				self.temp_controller.Pads_Selected_Changed.disconnect( temp_connection )
+				return False
+		self.temp_controller.Pads_Selected_Changed.disconnect( temp_connection )
+		return True
+
+	def Run_Measurment_Loop( self, sample_name, user, device_config_data, temperatures_to_measure, v_start, v_end, v_step ):
+		expected_data = ["Negative Pad","Positive Pad","Device Area (um^2)","Device Perimeter (um)"]
+		for temperature in temperatures_to_measure:
+			for device_index in range( len(device_config_data["Negative Pad"]) ):
+
+				self.measurement_actively_running = True
+				should_continue_measurement = self.Wait_For_Pads_Set( device_config_data["Negative Pad"][device_index], device_config_data["Positive Pad"][device_index] )
+				if not should_continue_measurement:
+					return
+				should_continue_measurement = self.Wait_For_Stable_Temp( temperature )
+				if not should_continue_measurement:
+					return
+
+				print( "Starting Measurement\n" )
+				meta_data = dict( sample_name=sample_name, user=user, temperature_in_k=temperature,
+					 device_area_in_um2=device_config_data["Device Area (um^2)"][device_index], device_location=device_config_data["Device Location"][device_index],
+					 device_perimeter_in_um=device_config_data["Device Perimeter (um)"][device_index], measurement_setup="LN2 Dewar" )
+				try: self.iv_controller.sweepFinished_signal.disconnect() 
+				except Exception: pass
+				self.iv_controller.sweepFinished_signal.connect( self.Set_Current_Data )
+				self.iv_controller.sweepFinished_signal.connect( lambda x_data, y_data :
+													self.Sweep_Part_Finished( x_data, y_data, sql_type=self.sql_type, sql_conn=self.sql_conn, meta_data=meta_data ) )
+				self.measurementRequested_signal.emit( v_start, v_end, v_step )
+
+				while( self.measurement_actively_running == True ):
+					QtCore.QCoreApplication.processEvents()
+
+		self.Stop_Measurment_Sweep()
+		print( "Finished Measurment" )
+
+	def Sweep_Part_Finished( self, x_data, y_data, sql_type, sql_conn, meta_data ):
+		if self.pads_are_reversed:
+			x_data = reversed( x_data )
+			y_data = reversed( y_data )
+		self.measurement_actively_running = False
+		Commit_XY_Data_To_SQL( sql_type, sql_conn, xy_data_sql_table="iv_raw_data", xy_sql_labels=("voltage_v","current_a"),
+							x_data=x_data, y_data=y_data, metadata_sql_table="iv_measurements", **meta_data )
 
 if __name__ == '__main__':
 	app = QApplication(sys.argv)
