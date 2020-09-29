@@ -108,6 +108,9 @@ class IV_Graph( QWidget ):
 		self.canvas.draw()
 		self.canvas.show()
 
+		z = np.polyfit(y_data, x_data, 1)
+		print( f"Resistance: {z[0]:g}, Offset: {z[1]:g}")
+
 	def clear_all_plots( self ):
 		for graph in self.all_graphs:
 			graph.remove()

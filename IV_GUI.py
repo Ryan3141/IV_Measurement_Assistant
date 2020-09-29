@@ -18,7 +18,7 @@ from MPL_Shared.Temperature_Controller_Settings import TemperatureControllerSett
 from MPL_Shared.SQL_Controller import Commit_XY_Data_To_SQL, Connect_To_SQL
 from MPL_Shared.IV_Measurement_Assistant import IV_Controller
 
-from IV_Measurement_Assistant.Pad_Description_File import Get_Device_Description_File
+from MPL_Shared.Pad_Description_File import Get_Device_Description_File
 
 base_path = os.path.dirname( os.path.realpath(__file__) )
 
@@ -113,6 +113,7 @@ class IV_Measurement_Assistant_App(QWidget, Ui_MainWindow):
 		self.takeMeasurement_pushButton.clicked.connect( self.Take_Single_Measurement )
 		self.outputToFile_pushButton.clicked.connect( self.Save_Data_To_File )
 		self.saveToDatabase_pushButton.clicked.connect( self.Save_Data_To_Database )
+		self.clearGraph_pushButton.clicked.connect( self.iv_Graph.clear_all_plots )
 
 		self.measurementRequested_signal.connect( self.iv_controller.Voltage_Sweep )
 		self.iv_controller.newSweepStarted_signal.connect( self.iv_Graph.new_plot )
@@ -227,12 +228,14 @@ class IV_Measurement_Assistant_App(QWidget, Ui_MainWindow):
 			configuration_file.write( configfile )
 
 		# Initialize Measurment Thread
-		self.active_measurement = Measurment_Loop( sample_name, user, device_config_data, temperatures_to_measure, v_start, v_end + v_step, v_step )
+		self.active_measurement = Measurment_Loop( sample_name, user, device_config_data, temperatures_to_measure, v_start, v_end, v_step )
 		self.active_measurement_thread = QtCore.QThread()
 		self.active_measurement.moveToThread( self.active_measurement_thread )
 		self.active_measurement_thread.started.connect( self.active_measurement.Run )
 
 		# Connect interactions with iv measurments and temperature control
+		self.active_measurement.shutoffTemp_signal.connect( self.temp_controller.Turn_Off )
+		self.active_measurement.turnonTemp_signal.connect( self.temp_controller.Turn_On )
 		self.active_measurement.measurementRequested_signal.connect( self.iv_controller.Voltage_Sweep )
 		self.active_measurement.Temperature_Change_Requested.connect( self.temp_controller.Set_Temp_And_Turn_On )
 		self.temp_controller.Temperature_Stable.connect( self.iv_Graph.clear_all_plots )
@@ -270,6 +273,8 @@ class Measurment_Loop( QtCore.QObject ):
 	Pad_Change_Requested = QtCore.pyqtSignal( int, int )
 	measurementRequested_signal = QtCore.pyqtSignal(float, float, float)
 	Finished = QtCore.pyqtSignal()
+	shutoffTemp_signal = QtCore.pyqtSignal()
+	turnonTemp_signal = QtCore.pyqtSignal()
 
 	def __init__( self, sample_name, user, device_config_data, temperatures_to_measure, v_start, v_end, v_step, parent=None ):
 		super().__init__( parent )
@@ -326,6 +331,7 @@ class Measurment_Loop( QtCore.QObject ):
 
 				print( "Starting Measurement at {} K on pads {} and {}".format( temperature, neg_pad, pos_pad ) )
 				self.data_collection_callback = lambda x_data, y_data : self.Sweep_Part_Finished( x_data, y_data, sql_type=self.sql_type, sql_conn=self.sql_conn, meta_data=meta_data )
+				self.shutoffTemp_signal.emit()
 				self.measurementRequested_signal.emit( self.v_start, self.v_end, self.v_step )
 				if self.Wait_For_Data():
 					self.Finished.emit()
@@ -335,6 +341,7 @@ class Measurment_Loop( QtCore.QObject ):
 		self.Finished.emit()
 
 	def Collect_Data( self, x_data, y_data ):
+		self.turnonTemp_signal.emit()
 		self.data_collection_callback( x_data, y_data )
 		self.data_collection_callback = lambda x_data, y_data : None
 
