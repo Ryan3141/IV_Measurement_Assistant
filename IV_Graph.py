@@ -53,6 +53,8 @@ class IV_Graph( QWidget ):
 		self.ax.set_xlabel( 'Bias (V)' )
 		self.ax.set_ylabel( 'Current (A)' )
 		self.ax.set_title( 'I-V' )
+		self.ax.grid(which='both')
+		self.ax.grid(which='minor', alpha=0.2, linestyle='--')
 		self.figure.tight_layout()
 		#self.ax.plot( [1,2,3,4], [1,2,3,4], 'b-')
 		self.all_graphs = []

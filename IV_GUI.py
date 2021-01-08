@@ -164,8 +164,8 @@ class IV_Measurement_Assistant_App(QWidget, Ui_MainWindow):
 		file_name = "IV Data_" + sample_name + "_" + timestr + ".csv"
 		print( "Saving File: " + file_name )
 		with open( file_name, 'w' ) as outfile:
-			outfile.write( ','.join([str(x) for x in self.current_data[0]]) + '\n' )
-			outfile.write( ','.join([str(x) for x in self.current_data[1]]) + '\n' )
+			for x,y in zip( self.current_data[0], self.current_data[1] ):
+				outfile.write( f'{x},{y}\n' )
 
 	def Save_Data_To_Database( self ):
 		if self.current_data == None:
@@ -284,7 +284,6 @@ class Measurment_Loop( QtCore.QObject ):
 		self.v_start = v_start
 		self.v_end = v_end
 		self.v_step = v_step
-		self.sql_type, self.sql_conn = Connect_To_SQL( resource_path( "configuration.ini" ) )
 		self.device_config_data = device_config_data
 
 		self.pads_are_reversed = False
@@ -316,6 +315,7 @@ class Measurment_Loop( QtCore.QObject ):
 		return False
 
 	def Run( self ):
+		self.sql_type, self.sql_conn = Connect_To_SQL( resource_path( "configuration.ini" ) )
 		for temperature in self.temperatures_to_measure:
 			for device_index in range( len(self.device_config_data["Negative Pad"]) ):
 				expected_data = ["Negative Pad","Positive Pad","Device Area (um^2)","Device Perimeter (um)", "Device Location"]
