@@ -98,11 +98,12 @@ class IV_Graph( QWidget ):
 	def add_new_data_point( self, x, y ):
 		self.newest_data = (x,y)
 		self.current_graph_data.append( (x, y) )
+		self.ax.autoscale_view(True,True,True)
 
 	def plot_finished( self, x_data, y_data ):
 		self.ani._stop()
 		self.running_graph.remove()
-		self.current_graph.set_data( *zip(*self.current_graph_data) )
+		self.current_graph.set_data( x_data, y_data )
 		self.ax.relim()
 		#self.ax.autoscale_view()
 		self.ax.autoscale_view(True,True,True)
@@ -110,8 +111,11 @@ class IV_Graph( QWidget ):
 		self.canvas.draw()
 		self.canvas.show()
 
-		z = np.polyfit(y_data, x_data, 1)
-		print( f"Resistance: {z[0]:g}, Offset: {z[1]:g}")
+		try:
+			z = np.polyfit(y_data, x_data, 1)
+			print( f"Resistance: {z[0]:g}, Offset: {z[1]:g}")
+		except Exception as e:
+			print( e )
 
 	def clear_all_plots( self ):
 		for graph in self.all_graphs:
