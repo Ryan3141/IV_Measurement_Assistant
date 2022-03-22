@@ -90,6 +90,11 @@ class IV_Measurement_Assistant_App(QWidget, Ui_MainWindow, Saveable_Session):
 		self.current_data = None
 		self.measurement = None
 
+	def closeEvent( self, event ):
+		self.iv_controller_thread.quit()
+		self.temp_controller_thread.quit()
+		QtWidgets.QWidget.closeEvent(self, event)
+
 	def Init_Subsystems( self ):
 		self.sql_type, self.sql_conn = Connect_To_SQL( resource_path( "configuration.ini" ), config_error_popup=Popup_Yes_Or_No )
 		self.config_window = TemperatureControllerSettingsWindow()
@@ -318,12 +323,12 @@ def Measurement_Sweep( temp_controller, iv_controller,
 			# Commit_XY_Data_To_SQL( sql_type, sql_conn, xy_data_sql_table="iv_raw_data", xy_sql_labels=("voltage_v","current_a"),
 			# 					x_data=x_data, y_data=y_data, metadata_sql_table="iv_measurements", **meta_data )
 
-	print( "this thread:", QtCore.QThread.currentThread() )
-	print ( "temp_controller thread:", temp_controller.thread() )
-	print( "Before Run_Async( temp_controller, temp_controller.Turn_Off ).Run()" )
+	# print( "this thread:", QtCore.QThread.currentThread() )
+	# print ( "temp_controller thread:", temp_controller.thread() )
+	# print( "Before Run_Async( temp_controller, temp_controller.Turn_Off ).Run()" )
 	Run_Async( temp_controller, lambda : temp_controller.Turn_Off() ).Run()
 
-	print( "Finished Measurment" )
+	print( "\nFinished Measurment" )
 
 
 if __name__ == '__main__':

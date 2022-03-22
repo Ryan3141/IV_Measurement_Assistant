@@ -442,7 +442,7 @@
   <customwidget>
    <class>IV_Graph</class>
    <extends>QWidget</extends>
-   <header>IV_Graph.h</header>
+   <header>IV_Measurement_Assistant.IV_Graph.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>
